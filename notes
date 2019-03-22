@@ -10,7 +10,7 @@ XA协议原理：https://blog.csdn.net/ggibenben1314/article/details/48812501
 Jta事务的实现原理：https://www.ibm.com/developerworks/cn/java/j-lo-jta/#icomments
 Jta事务的官方配置文档：https://spring.io/blog/2011/08/15/configuring-spring-and-jta-without-full-java-ee/
 Druid连接池配置官方文档：https://github.com/alibaba/druid/wiki/DruidDataSource%E9%85%8D%E7%BD%AE
-本项目的github地址：
+本项目的github地址：https://github.com/Alexshi5/demo-jtatransaction
 
 二、Maven依赖
 
