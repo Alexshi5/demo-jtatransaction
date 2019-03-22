@@ -1,0 +1,422 @@
+简介：
+
+    本项目使用springboot2.0.5+jpa+mysql+druid+atomikos实现jta事务管理，请注意druid与mysql的jar包版本适配，
+否则可能会出现异常。
+
+一、相关链接
+
+事务相关的基础知识：https://blog.csdn.net/u013789656/article/details/80928299
+XA协议原理：https://blog.csdn.net/ggibenben1314/article/details/48812501
+Jta事务的实现原理：https://www.ibm.com/developerworks/cn/java/j-lo-jta/#icomments
+Jta事务的官方配置文档：https://spring.io/blog/2011/08/15/configuring-spring-and-jta-without-full-java-ee/
+Druid连接池配置官方文档：https://github.com/alibaba/druid/wiki/DruidDataSource%E9%85%8D%E7%BD%AE
+本项目的github地址：
+
+二、Maven依赖
+
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-test</artifactId>
+        <scope>test</scope>
+    </dependency>
+
+    <!--spring data jpa-->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!--mysql jdbc-->
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+    </dependency>
+
+    <!--druid pool-->
+    <dependency>
+        <groupId>com.alibaba</groupId>
+        <artifactId>druid-spring-boot-starter</artifactId>
+        <version>1.1.9</version>
+    </dependency>
+
+    <!--atomikos jta transaction manager-->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-jta-atomikos</artifactId>
+    </dependency>
+</dependencies>
+
+三、实体类
+
+@Entity
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long oid;
+
+    private String username;
+
+    private String pwd;
+
+    //...getter
+    //...setter
+}
+
+@Entity
+@Table(name = "user_info")
+public class UserInfo {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long oid;
+
+    @Column(name = "desc_info")
+    private String descInfo;
+
+    //...getter
+    //...setter
+}
+
+四、持久化类
+
+@Repository
+public interface UserRepository extends JpaRepository<User,Long> {
+}
+
+@Repository
+public interface UserInfoRepository extends JpaRepository<UserInfo,Long> {
+}
+
+请注意：实体类和持久化类要使用分包管理策略，不同数据源的类放在不同的包里
+
+五、简单的建表语句(user在demo5中，user_info在demo6中)
+
+create table user (oid bigint not null auto_increment, pwd varchar(255),
+username varchar(255), primary key (oid)) engine=InnoDB;
+
+create table user_info (oid bigint not null auto_increment,
+desc_info varchar(255), primary key (oid)) engine=InnoDB;
+
+六、系统环境配置（配置在application.properties文件中）
+
+# JPA统一配置
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQL57Dialect
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql = true
+spring.jpa.properties.hibernate.hbm2ddl.auto=none
+
+# 多个数据源配置
+datasource.demo5.url=jdbc:mysql://localhost:3306/demo5?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8
+datasource.demo5.username=root
+datasource.demo5.password=123
+datasource.demo5.driver-class-name=com.mysql.jdbc.Driver
+
+datasource.demo6.url=jdbc:mysql://localhost:3306/demo6?useUnicode=true&characterEncoding=utf8&serverTimezone=GMT%2B8
+datasource.demo6.username=root
+datasource.demo6.password=123
+datasource.demo6.driver-class-name=com.mysql.jdbc.Driver
+
+# Druid连接池配置（更多连接池配置请参考官方文档）
+druid.initialSize=5
+druid.minIdle=5
+druid.maxActive=100
+
+七、关闭SpringBoot对数据源和事务的自动配置，开启手动配置
+
+//关闭自动配置
+@SpringBootApplication(
+        exclude = {
+                DataSourceAutoConfiguration.class,
+                DataSourceTransactionManagerAutoConfiguration.class
+        }
+)
+//开启手动配置
+@EnableTransactionManagement
+public class DemoJtatransactionApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(DemoJtatransactionApplication.class, args);
+    }
+
+}
+
+八、创建多数据源配置类DataSourceConfig
+
+import com.alibaba.druid.pool.xa.DruidXADataSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.jta.atomikos.AtomikosDataSourceBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.core.env.Environment;
+
+import javax.sql.DataSource;
+
+@Configuration
+public class DataSourceConfig {
+    @Autowired
+    private Environment env;
+
+    @Value("${druid.initialSize}")
+    private Integer initialSize;
+
+    @Value("${druid.minIdle}")
+    private Integer minIdle;
+
+    @Value("${druid.maxActive}")
+    private Integer maxActive;
+
+    public void setInitialSize(Integer initialSize) {
+        this.initialSize = initialSize;
+    }
+
+    public void setMinIdle(Integer minIdle) {
+        this.minIdle = minIdle;
+    }
+
+    public void setMaxActive(Integer maxActive) {
+        this.maxActive = maxActive;
+    }
+
+    @Primary
+    @Bean(name = "demo5DataSource")
+    @Qualifier("demo5DataSource")
+    public DataSource demo5DataSource(){
+        return getDruidXADataSource(
+                this.env.getProperty("datasource.demo5.username"),
+                this.env.getProperty("datasource.demo5.password"),
+                this.env.getProperty("datasource.demo5.url"),
+                this.env.getProperty("datasource.demo5.datasourceName"));
+    }
+
+    @Bean(name = "demo6DataSource")
+    @Qualifier("demo6DataSource")
+    public DataSource demo6DataSource(){
+        return getDruidXADataSource(
+                this.env.getProperty("datasource.demo6.username"),
+                this.env.getProperty("datasource.demo6.password"),
+                this.env.getProperty("datasource.demo6.url"),
+                this.env.getProperty("datasource.demo6.datasourceName"));
+    }
+
+    /**
+     * 获取Atomikos管理的Druid连接池
+     * @param username
+     * @param password
+     * @param url
+     * @param datasourceName
+     * @return
+     */
+    private DataSource getDruidXADataSource(String username, String password, String url, String datasourceName){
+        DruidXADataSource druidXADataSource = new DruidXADataSource();
+        druidXADataSource.setUrl(url);
+        druidXADataSource.setUsername(username);
+        druidXADataSource.setPassword(password);
+        druidXADataSource.setMinIdle(minIdle);
+        druidXADataSource.setMaxActive(maxActive);
+        druidXADataSource.setInitialSize(initialSize);
+
+        AtomikosDataSourceBean xaDataSource = new AtomikosDataSourceBean();
+        xaDataSource.setUniqueResourceName(datasourceName);
+        xaDataSource.setXaDataSource(druidXADataSource);
+
+        return xaDataSource;
+    }
+}
+
+九、创建数据库demo5的事务配置类
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.orm.jpa.JpaProperties;
+import org.springframework.boot.orm.jpa.EntityManagerFactoryBuilder;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.orm.jpa.JpaTransactionManager;
+import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import javax.annotation.Resource;
+import javax.sql.DataSource;
+
+@Configuration
+@EnableJpaRepositories(
+        //basePackageClasses = 设置Repository所在的类
+        basePackages = "com.mengfei.demo.repository.demo5", //设置Repository所在的包
+        entityManagerFactoryRef = "demo5EntityManagerFactory", //设置实体管理工厂
+        transactionManagerRef = "demo5TransactionManager" //设置事务管理器
+)
+public class Demo5TransactionConfig {
+
+    /**
+     * 统一配置多数据源之后，自动注入数据源
+     */
+    @Autowired
+    @Qualifier("demo5DataSource")
+    private DataSource demo5DataSource;
+
+    /**
+     * 自动注入jpa配置
+     */
+    @Resource
+    private JpaProperties jpaProperties;
+
+
+    /**
+     * 将数据源、连接池、以及其他配置策略进行封装返回给事务管理器
+     * @param builder
+     * @return
+     */
+    @Primary //自动装配时当出现多个Bean候选者时，被注解为@Primary的Bean将作为首选者，否则将抛出异常
+    @Bean(name = "demo5EntityManagerFactory")
+    public LocalContainerEntityManagerFactoryBean entityManagerFactoryDemo(EntityManagerFactoryBuilder builder){
+        return builder
+                .dataSource(demo5DataSource)
+                .properties(jpaProperties.getProperties())
+                .packages("com.mengfei.demo.pojo.demo5") //设置实体类所在位置：类或包
+                .persistenceUnit("demo5PersistenceUnit") //持久化单元名称
+                .build();
+    }
+
+    /**
+     * 返回数据源的事务管理器
+     * @param builder
+     * @return
+     */
+    @Primary
+    @Bean(name = "demo5TransactionManager")
+    public PlatformTransactionManager transactionManagerDemo(EntityManagerFactoryBuilder builder){
+        return new JpaTransactionManager(entityManagerFactoryDemo(builder).getObject());
+    }
+}
+
+十、创建数据库demo6的事务配置类Demo6TransactionConfig
+
+    只需要将Demo5TransactionConfig类中的内容复制一份到新的配置类中，然后将类中的两个@Primary删除掉即可，
+因为多数据源需要配置一个主事务管理器，demo5中已经用过@Primary了，这里就不再使用，在配置数据源的时候也是一样。
+
+十一、创建Jta事务管理配置类JtaTransactionManagerConfig
+
+import com.atomikos.icatch.jta.UserTransactionImp;
+import com.atomikos.icatch.jta.UserTransactionManager;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.transaction.jta.JtaTransactionManager;
+
+import javax.transaction.UserTransaction;
+
+@Configuration
+public class JtaTransactionManagerConfig {
+
+    @Bean(name = "jtaTransactionManager")
+    @Primary
+    public JtaTransactionManager regTransactionManager () {
+        UserTransactionManager userTransactionManager = new UserTransactionManager();
+        UserTransaction userTransaction = new UserTransactionImp();
+        return new JtaTransactionManager(userTransaction, userTransactionManager);
+    }
+}
+
+十二、创建一个用户服务类UserService
+
+@Service
+public class UserService {
+
+    @Autowired
+    private UserRepository userRepository;
+    @Autowired
+    private UserInfoRepository userInfoRepository;
+
+    //单数据源的事务回滚
+    @Transactional(value = "demo5TransactionManager", rollbackFor = Exception.class)
+    public String saveUser(User user) throws Exception{
+        User user1 = userRepository.save(user);
+        if(null == user1){
+            user1 = new User();
+        }
+
+        int i = 10/0;
+
+        return user1.toString();
+    }
+
+    //多数据源的事务回滚，这里如果使用demo5TransactionManager，那么它将只会回滚数据库demo5中的事务
+    //@Transactional(value = "demo5TransactionManager", rollbackFor = Exception.class)
+    @Transactional(value = "jtaTransactionManager", rollbackFor = Exception.class)
+    public String saveUser(User user, UserInfo userInfo) throws Exception{
+        User user1 = userRepository.save(user);
+        if(null == user1){
+            user1 = new User();
+        }
+
+        UserInfo userInfo1 = userInfoRepository.save(userInfo);
+        if(null == userInfo1){
+            userInfo1 = new UserInfo();
+        }
+
+        int i = 10/0;
+
+        return user1 + "==" + userInfo1;
+    }
+}
+
+十三、使用junit进行单元测试
+
+@RunWith(SpringRunner.class)
+@SpringBootTest
+public class DemoJtatransactionApplicationTests {
+    @Autowired
+    private UserService userService;
+
+    @Test
+    public void singleTransactionTest(){
+        User user = new User();
+        user.setUsername("zhangsan");
+        user.setPwd("z001");
+
+        try{
+            String str = userService.saveUser(user);
+            System.out.println(str);
+        }catch (Exception e){
+            System.out.println(e);
+        }
+    }
+
+    @Test
+    public void manyTransactionTest(){
+        User user = new User();
+        user.setUsername("zhangsan");
+        user.setPwd("z001");
+
+        UserInfo userInfo = new UserInfo();
+        userInfo.setDescInfo("这一个关于账号zhangsan的详细描述！");
+
+        try{
+            String str = userService.saveUser(user,userInfo);
+            System.out.println(str);
+        }catch (Exception e){
+            System.out.println(e);
+        }
+    }
+}
+
+参考链接：
+
+1、https://www.cnblogs.com/shamo89/p/7326718.html （springboot+jpa+MysqlXA）
+2、https://www.cnblogs.com/tusheng/p/9077309.html （springboot+mybatis+MysqlXA）
+3、https://my.oschina.net/simpleton/blog/916108 （springboot+DruidXA）
+
+
+
